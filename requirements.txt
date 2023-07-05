@@ -1,0 +1,9 @@
+tqdm
+chex==0.1.5
+flax==0.6.2
+numba
+datasets
+sentencepiece
+huggingface_hub
+transformers
+optax

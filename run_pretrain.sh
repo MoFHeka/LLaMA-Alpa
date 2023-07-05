@@ -1,0 +1,19 @@
+python3 run_clm_flax.py \
+    --output_dir="./norwegian-llama" \
+    --model_type="llama" \
+    --config_name="./norwegian-llama" \
+    --tokenizer_name="decapoda-research/llama-7b-hf" \
+    --dataset_name="glue" \
+    --dataset_config_name="mrpc" \
+    --do_train --do_eval \
+    --block_size="512" \
+    --per_device_train_batch_size="2" \
+    --per_device_eval_batch_size="2" \
+    --dtype="float16" \
+    --learning_rate="1e-3" --warmup_steps="1000" \
+    --adam_beta1="0.9" --adam_beta2="0.98" --weight_decay="0.01" \
+    --overwrite_output_dir \
+    --num_train_epochs="20" \
+    --logging_steps="100" \
+    --save_steps="2500" \
+    --eval_steps="2500"
