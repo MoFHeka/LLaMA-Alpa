@@ -187,7 +187,10 @@ class FlaxLlamaMLP(nn.Module):
 
     def __call__(self, x: jnp.ndarray, deterministic: bool = False):
         if self.hidden_act == "silu":
+            gate_up_states = self.gate_up_proj(x).reshape(x.shape[:2] + (-1, 2))
             gate_states, up_states = jnp.split(self.gate_up_proj(x), 2, axis=-1)
+            gate_states = gate_states.reshape(x.shape[:2] + (-1,))
+            up_states = up_states.reshape(x.shape[:2] + (-1,))
             hidden_states = self.down_proj(self.act_fn(gate_states) * up_states)
         else:
             hidden_states = self.down_proj(
@@ -240,9 +243,29 @@ class FlaxLlamaAttention(nn.Module):
                 f" and `num_heads`: {self.num_heads})."
             )
 
-        self.qkv_proj = nn.DenseGeneral(
-            features=(3 * self.num_heads, self.head_dim),
-            axis=-1,
+        # Alpa currently does not support sharding for layers of nn.DenseGeneral with multiple outputs
+        # self.qkv_proj = nn.DenseGeneral(
+        #     features=(3 * self.num_heads, self.head_dim),
+        #     axis=-1,
+        #     dtype=self.dtype,
+        #     param_dtype=self.param_dtype,
+        #     kernel_init=self.kernel_init,
+        #     use_bias=False,
+        #     precision=self.precision,
+        # )
+        #
+        # self.o_proj = nn.DenseGeneral(
+        #     features=self.hidden_size,
+        #     axis=(-2, -1),
+        #     kernel_init=self.kernel_init,
+        #     dtype=self.dtype,
+        #     param_dtype=self.param_dtype,
+        #     use_bias=False,
+        #     precision=self.precision,
+        # )
+
+        self.qkv_proj = nn.Dense(
+            features=(3 * self.hidden_size),
             dtype=self.dtype,
             param_dtype=self.param_dtype,
             kernel_init=self.kernel_init,
@@ -250,9 +273,8 @@ class FlaxLlamaAttention(nn.Module):
             precision=self.precision,
         )
 
-        self.o_proj = nn.DenseGeneral(
+        self.o_proj = nn.Dense(
             features=self.hidden_size,
-            axis=(-2, -1),
             kernel_init=self.kernel_init,
             dtype=self.dtype,
             param_dtype=self.param_dtype,
@@ -271,6 +293,14 @@ class FlaxLlamaAttention(nn.Module):
         return tensor.reshape(bsz, seq_len, self.num_heads, self.head_dim).transpose(
             1, 2
         )
+
+    def _split_heads(self, hidden_states):
+        return hidden_states.reshape(
+            hidden_states.shape[:2] + (self.num_heads, self.head_dim)
+        )
+
+    def _merge_heads(self, hidden_states):
+        return hidden_states.reshape(hidden_states.shape[:2] + (self.hidden_size,))
 
     @nn.compact
     def _concatenate_to_cache(self, query, key, value, attention_mask):
@@ -322,7 +352,21 @@ class FlaxLlamaAttention(nn.Module):
         # project inputs_q to multi-headed q/k/v
         # dimensions are then [batch..., length, n_heads, n_features_per_head]
         qkv_states = self.qkv_proj(hidden_states)
-        query_states, key_states, value_states = jnp.split(qkv_states, 3, axis=-2)
+        qkv_states = qkv_states.reshape(
+            qkv_states.shape[:2] + (-1, 3)
+        )  # (bs, seq_len, hs * 3) -> (bs, seq_len, hs, 3) for performance
+        query_states, key_states, value_states = jnp.split(
+            qkv_states, 3, axis=-1
+        )  # (bs, seq_len, hs, 3) -> 3 * (bs, seq_len, hs, 1)
+        query_states = self._split_heads(
+            query_states
+        )  # (bs, seq_len, hs, 1) -> (bs, seq_len, nh, hs)
+        key_states = self._split_heads(key_states)
+        value_states = self._split_heads(value_states)
+
+        # Alpa currently does not support sharding for layers of nn.DenseGeneral with multiple outputs
+        # qkv_states = self.qkv_proj(hidden_states)
+        # query_states, key_states, value_states = jnp.split(qkv_states, 3, axis=-2)
 
         # During fast autoregressive decoding, we feed one position at a time,
         # and cache the keys and values step by step.
@@ -374,6 +418,7 @@ class FlaxLlamaAttention(nn.Module):
         )  # pytype: disable=wrong-keyword-args
         attn_output = jnp.einsum("...hqk,...khd->...qhd", attn_weights, value_states)
         # back to the original inputs dimensions
+        attn_output = self._merge_heads(attn_output)
         attn_output = self.o_proj(attn_output)
         if self.resid_dropout:
             attn_output = self.resid_dropout(
