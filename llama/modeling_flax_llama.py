@@ -144,8 +144,12 @@ def rotate_half(x):
 @jax.jit
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
     # Take [bsz, seq_len] from [seq_len, dim] in axis 0 (seq_len)
-    cos = jnp.take(cos, position_ids, axis=0)[..., None, :]  # [bsz, seq_len, 1, dim]
-    sin = jnp.take(sin, position_ids, axis=0)[..., None, :]  # [bsz, seq_len, 1, dim]
+    cos = jnp.take(cos, position_ids.reshape(-1), axis=0).reshape(
+        q.shape[:2] + (1, q.shape[3])
+    )  # [bsz, seq_len, 1, dim]
+    sin = jnp.take(sin, position_ids.reshape(-1), axis=0).reshape(
+        q.shape[:2] + (1, q.shape[3])
+    )  # [bsz, seq_len, 1, dim]
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
