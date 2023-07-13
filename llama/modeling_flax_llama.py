@@ -94,6 +94,7 @@ class FlaxLlamaRotaryEmbedding(nn.Module):
     dim: int
     max_position_embeddings: int = 2048
     base: int = 10000
+    dtype: Optional[jnp.dtype] = None
     param_dtype: Optional[jnp.dtype] = None
 
     def setup(self):
@@ -113,7 +114,7 @@ class FlaxLlamaRotaryEmbedding(nn.Module):
         self.cos_cached = lax.cos(emb)[:, :].astype(self.param_dtype)
         self.sin_cached = lax.sin(emb)[:, :].astype(self.param_dtype)
 
-    def __call__(self, dtype: jnp.dtype, seq_len: int):
+    def __call__(self, seq_len: int):
         # x: [bs, num_attention_heads, seq_len, head_size]
         # This `if` block is unlikely to be run after we build sin/cos in `__init__`. Keep the logic here just in case.
         if seq_len > self.max_seq_len_cached:
@@ -124,11 +125,11 @@ class FlaxLlamaRotaryEmbedding(nn.Module):
             )
             freqs = jnp.einsum("i,j->ij", t, self.inv_freq)
             emb = lax.concatenate([freqs, freqs], dimension=1)
-            self.cos_cached = lax.cos(emb)[:, :].astype(dtype)
-            self.sin_cached = lax.sin(emb)[:, :].astype(dtype)
+            self.cos_cached = lax.cos(emb)[:, :].astype(self.dtype)
+            self.sin_cached = lax.sin(emb)[:, :].astype(self.dtype)
         return (
-            self.cos_cached[:seq_len, ...].astype(dtype),
-            self.sin_cached[:seq_len, ...].astype(dtype),
+            self.cos_cached[:seq_len, ...].astype(self.dtype),
+            self.sin_cached[:seq_len, ...].astype(self.dtype),
         )
 
 
@@ -283,7 +284,10 @@ class FlaxLlamaAttention(nn.Module):
         )
 
         self.rotary_emb = FlaxLlamaRotaryEmbedding(
-            self.head_dim, max_position_embeddings=self.max_position_embeddings
+            self.head_dim,
+            max_position_embeddings=self.max_position_embeddings,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
         )
         self.resid_dropout = None
         if hasattr(self.config, "resid_pdrop"):
@@ -386,7 +390,7 @@ class FlaxLlamaAttention(nn.Module):
 
         # apply rotary position embedding
         kv_seq_len = key_states.shape[1]
-        cos, sin = self.rotary_emb(value_states.dtype, seq_len=kv_seq_len)
+        cos, sin = self.rotary_emb(seq_len=kv_seq_len)
         query_states, key_states = apply_rotary_pos_emb(
             query_states, key_states, cos, sin, position_ids
         )
