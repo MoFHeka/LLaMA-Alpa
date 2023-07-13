@@ -69,25 +69,25 @@ _CONFIG_FOR_DOC = "LlamaConfig"
 class FlaxLlamaRMSNorm(nn.Module):
     hidden_size: int
     eps: float = 1e-6
+    dtype: Optional[jnp.dtype] = None
     param_dtype: Optional[jnp.dtype] = None
 
-    def setup(self):
+    def setup(self) -> None:
         """
         FlaxLlamaRMSNorm is equivalent to T5LayerNorm
         """
         self.weight = self.param(
-            "weight", jax.nn.initializers.ones, (self.hidden_size), self.param_dtype
+            "weight", nn.initializers.ones, (self.hidden_size,), self.param_dtype
         )
-        self.variance_epsilon = self.eps
 
-    def __call__(self, hidden_states: jnp.ndarray):
-        input_dtype = hidden_states.dtype
-        variance = jnp.mean(
-            lax.pow(hidden_states.astype(jnp.float32), 2.0), -1, keepdims=True
-        )
-        hidden_states = hidden_states * lax.rsqrt(variance + self.variance_epsilon)
+    def _norm(self, x: jnp.ndarray) -> jnp.ndarray:
+        return x * jax.lax.rsqrt(jnp.square(x).mean(-1, keepdims=True) + self.eps)
 
-        return (self.weight * hidden_states).astype(input_dtype)
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        x = x.astype(jnp.promote_types(self.dtype, jnp.float32))
+        output = self._norm(x).astype(self.dtype)
+        weight = jnp.asarray(self.weight, self.dtype)
+        return output * weight
 
 
 class FlaxLlamaRotaryEmbedding(nn.Module):
@@ -455,6 +455,7 @@ class FlaxLlamaDecoderLayer(nn.Module):
         self.input_layernorm = FlaxLlamaRMSNorm(
             self.config.hidden_size,
             eps=self.config.rms_norm_eps,
+            dtype=self.dtype,
             param_dtype=self.param_dtype,
         )
         self.post_attention_layernorm = FlaxLlamaRMSNorm(
